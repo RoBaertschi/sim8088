@@ -1,0 +1,4 @@
+sim8088
+listings/*
+!listings/listing_*.asm
+sim8088.dSYM/Contents
