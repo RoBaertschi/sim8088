@@ -249,17 +249,55 @@ Acc_Mem :: struct {
     addr: u16,
 }
 
-Mov_Reg_Mem_To_From_Reg :: struct {
+Imm_To_Acc :: struct {
+    sized_data: Sized_Instruction_Data,
+}
+
+@private
+imm_to_acc :: proc(opcode: u8, s: io.Reader) -> (i: Imm_To_Acc, err: Decode_Instruction_Error) {
+    size := Instruction_Size(opcode & 0b1)
+    sized_data := sized_instruction_data_from_stream(size, s) or_return
+    return {sized_data}, nil
+}
+
+Imm_To_Reg_Mem :: struct {
+    sized_data:   Sized_Instruction_Data,
+    displacement: Instruction_Displacement,
+}
+
+@private
+imm_to_reg_mem :: proc(opcode: u8, s: io.Reader) -> (i: Imm_To_Reg_Mem, err: Decode_Instruction_Error) {
+    size := Instruction_Size(opcode & 0b1)
+    displacement, _ := instruction_displacement_from_stream(size, s) or_return
+    sized_data := sized_instruction_data_from_stream(size, s) or_return
+    return Imm_To_Reg_Mem{sized_data = sized_data, displacement = displacement}, nil
+}
+
+// reg to mem/reg
+Reg_To_Mem :: struct {
     direction:    Instruction_Direction,
     size:         Instruction_Size,
     reg:          Register,
     displacement: Instruction_Displacement,
 }
 
-Mov_Imm_To_Reg_Mem :: struct {
-    sized_data:   Sized_Instruction_Data,
-    displacement: Instruction_Displacement,
+@private
+reg_to_mem :: proc(opcode: u8, s: io.Reader) -> (i: Reg_To_Mem, err: Decode_Instruction_Error) {
+    direction := Instruction_Direction((opcode >> 1) & 0b1)
+    size := Instruction_Size(opcode & 0b1)
+    displacement, read_byte := instruction_displacement_from_stream(size, s) or_return
+    reg := register_from_byte_with_size((read_byte >> 3) & 0b111, size)
+    return Mov_Reg_Mem_To_From_Reg{
+        direction = direction,
+        size = size,
+        displacement = displacement,
+        reg = reg,
+    }, nil
 }
+
+Mov_Reg_Mem_To_From_Reg :: Reg_To_Mem
+
+Mov_Imm_To_Reg_Mem :: Imm_To_Reg_Mem
 
 Mov_Imm_To_Reg :: struct {
     sized_data: Sized_Instruction_Data,
@@ -315,21 +353,9 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
 
     switch opcode {
     case 0o210..=0o213: // reg/men to/from reg
-        direction := Instruction_Direction((opcode >> 1) & 0b1)
-        size := Instruction_Size(opcode & 0b1)
-        displacement, read_byte := instruction_displacement_from_stream(size, s) or_return
-        reg := register_from_byte_with_size((read_byte >> 3) & 0b111, size)
-        return Mov_Reg_Mem_To_From_Reg{
-            direction = direction,
-            size = size,
-            displacement = displacement,
-            reg = reg,
-        }, nil
+        return reg_to_mem(opcode, s)
     case 0o306, 0o307: // imm to mem
-        size := Instruction_Size(opcode & 0b1)
-        displacement, _ := instruction_displacement_from_stream(size, s) or_return
-        sized_data := sized_instruction_data_from_stream(size, s) or_return
-        return Mov_Imm_To_Reg_Mem{sized_data = sized_data, displacement = displacement}, nil
+        return imm_to_reg_mem(opcode, s)
     case 0o260..=0o277: // imm to reg
         size := Instruction_Size((opcode >> 3) & 0b1)
         reg := register_from_byte_with_size(opcode & 0b111, size)
