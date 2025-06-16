@@ -95,7 +95,7 @@ register_string :: proc(reg: Register, allocator := context.allocator) \
     -> string {
     ada_case := fmt.aprintf("%v", reg, allocator = allocator)
     defer delete(ada_case, allocator = allocator)
-    return strings.to_lower(ada_case)
+    return strings.to_lower(ada_case, allocator = allocator)
 }
 
 register_from_byte_register :: proc(reg: Byte_Register) -> Register {
@@ -296,9 +296,9 @@ instruction_string :: proc(i: Instruction, allocator := context.allocator) -> st
             defer { delete(r, allocator = allocator); delete(d, allocator = allocator) }
             return fmt.aprintf("mov %s, %s", r, d, allocator = allocator)
         case Mov_Mem_To_Acc:
-            return fmt.aprintf("mov ax, [%s %d]", instruction_size_string(mov.size), mov.addr)
+            return fmt.aprintf("mov ax, [%s %d]", instruction_size_string(mov.size), mov.addr, allocator = allocator)
         case Mov_Acc_To_Mem:
-            return fmt.aprintf("mov [%s %d], ax", instruction_size_string(mov.size), mov.addr)
+            return fmt.aprintf("mov [%s %d], ax", instruction_size_string(mov.size), mov.addr, allocator = allocator)
         }
     case:
         fmt.panicf("nil instruction not supported")
