@@ -287,7 +287,7 @@ reg_to_mem :: proc(opcode: u8, s: io.Reader) -> (i: Reg_To_Mem, err: Decode_Inst
     size := Instruction_Size(opcode & 0b1)
     displacement, read_byte := instruction_displacement_from_stream(size, s) or_return
     reg := register_from_byte_with_size((read_byte >> 3) & 0b111, size)
-    return Mov_Reg_Mem_To_From_Reg{
+    return Reg_To_Mem{
         direction = direction,
         size = size,
         displacement = displacement,
@@ -295,7 +295,7 @@ reg_to_mem :: proc(opcode: u8, s: io.Reader) -> (i: Reg_To_Mem, err: Decode_Inst
     }, nil
 }
 
-Mov_Reg_Mem_To_From_Reg :: Reg_To_Mem
+Mov_Reg_To_Mem :: Reg_To_Mem
 
 Mov_Imm_To_Reg_Mem :: Imm_To_Reg_Mem
 
@@ -304,18 +304,37 @@ Mov_Imm_To_Reg :: struct {
     reg:        Register,
 }
 
+
 Mov_Mem_To_Acc :: distinct Acc_Mem
 Mov_Acc_To_Mem :: distinct Acc_Mem
 
-Mov_Instruction :: union #no_nil { Mov_Reg_Mem_To_From_Reg, Mov_Imm_To_Reg_Mem, Mov_Imm_To_Reg, Mov_Mem_To_Acc, Mov_Acc_To_Mem }
+Mov_Instruction :: union #no_nil { Mov_Reg_To_Mem, Mov_Imm_To_Reg_Mem, Mov_Imm_To_Reg, Mov_Mem_To_Acc, Mov_Acc_To_Mem }
 
-Instruction :: union { Mov_Instruction }
+Add_Reg_Mem_With_Register :: Reg_To_Mem
+Add_Imm_To_Reg_Mem :: Imm_To_Reg_Mem
+Add_Imm_To_Acc :: Imm_To_Acc
+
+Add_Instruction :: union #no_nil { Add_Reg_Mem_With_Register, Add_Imm_To_Reg_Mem, Add_Imm_To_Acc }
+
+Sub_Reg_Mem_With_Register :: Reg_To_Mem
+Sub_Imm_To_Reg_Mem :: Imm_To_Reg_Mem
+Sub_Imm_To_Acc :: Imm_To_Acc
+
+Sub_Instruction :: union #no_nil { Sub_Reg_Mem_With_Register, Sub_Imm_To_Reg_Mem, Sub_Imm_To_Acc }
+
+Cmp_Reg_Mem_With_Register :: Reg_To_Mem
+Cmp_Imm_To_Reg_Mem :: Imm_To_Reg_Mem
+Cmp_Imm_To_Acc :: Imm_To_Acc
+
+Cmp_Instruction :: union #no_nil { Cmp_Reg_Mem_With_Register, Cmp_Imm_To_Reg_Mem, Cmp_Imm_To_Acc }
+
+Instruction :: union { Mov_Instruction, Add_Instruction, Sub_Instruction, Cmp_Instruction }
 
 instruction_string :: proc(i: Instruction, allocator := context.allocator) -> string {
     switch i in i {
     case Mov_Instruction:
         switch mov in i {
-        case Mov_Reg_Mem_To_From_Reg:
+        case Mov_Reg_To_Mem:
             d, r := instruction_displacement_string(mov.displacement, allocator = allocator), register_string(mov.reg, allocator = allocator)
             defer { delete(d, allocator = allocator); delete(r, allocator = allocator) }
             switch mov.direction {
@@ -352,15 +371,16 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
     }
 
     switch opcode {
+    // Mov
     case 0o210..=0o213: // reg/men to/from reg
-        return reg_to_mem(opcode, s)
+        return Mov_Instruction(reg_to_mem(opcode, s) or_return), nil
     case 0o306, 0o307: // imm to mem
-        return imm_to_reg_mem(opcode, s)
+        return Mov_Instruction(imm_to_reg_mem(opcode, s) or_return), nil
     case 0o260..=0o277: // imm to reg
         size := Instruction_Size((opcode >> 3) & 0b1)
         reg := register_from_byte_with_size(opcode & 0b111, size)
         sized_data := sized_instruction_data_from_stream(size, s) or_return
-        return Mov_Imm_To_Reg{reg = reg, sized_data = sized_data}, nil
+        return Mov_Instruction(Mov_Imm_To_Reg{reg = reg, sized_data = sized_data}), nil
     case 0o240, 0o241:  // mem to acc
         size := Instruction_Size(opcode & 0b1)
         buffer: [2]u8
@@ -369,7 +389,7 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
             err = .Missing_Data
             return
         }
-        return Mov_Mem_To_Acc{size = size, addr = transmute(u16)buffer}, nil
+        return Mov_Instruction(Mov_Mem_To_Acc{size = size, addr = transmute(u16)buffer}), nil
     case 0o242, 0o243: // acc to mem
         size := Instruction_Size(opcode & 0b1)
         buffer: [2]u8
@@ -378,7 +398,14 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
             err = .Missing_Data
             return
         }
-        return Mov_Acc_To_Mem{size = size, addr = transmute(u16)buffer}, nil
+        return Mov_Instruction(Mov_Acc_To_Mem{size = size, addr = transmute(u16)buffer}), nil
+
+    case 0o000..=0o003:
+        return Add_Instruction(reg_to_mem(opcode, s) or_return), nil
+    case 0o200..=0o203:
+        return Add_Instruction(imm_to_reg_mem(opcode, s) or_return), nil
+    case 0o004..=0o010:
+        return Add_Instruction(imm_to_acc(opcode, s) or_return), nil
     }
 
     err = .Unsupported_Opcode
