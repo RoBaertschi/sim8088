@@ -254,6 +254,18 @@ Imm_To_Acc :: struct {
 }
 
 @private
+imm_to_acc_string :: proc(opcode: string, ita: Imm_To_Acc, allocator := context.allocator) -> string {
+    switch data in ita.sized_data {
+    case u8:
+        return fmt.aprintf("%s al, %d", opcode, data, allocator = allocator)
+    case u16:
+        return fmt.aprintf("%s ax, %d", opcode, data, allocator = allocator)
+    case:
+        unreachable()
+    }
+}
+
+@private
 imm_to_acc :: proc(opcode: u8, s: io.Reader) -> (i: Imm_To_Acc, err: Decode_Instruction_Error) {
     size := Instruction_Size(opcode & 0b1)
     sized_data := sized_instruction_data_from_stream(size, s) or_return
@@ -266,11 +278,32 @@ Imm_To_Reg_Mem :: struct {
 }
 
 @private
-imm_to_reg_mem :: proc(opcode: u8, s: io.Reader) -> (i: Imm_To_Reg_Mem, err: Decode_Instruction_Error) {
+imm_to_reg_mem_string :: proc(opcode: string, itrm: Imm_To_Reg_Mem, allocator := context.allocator) -> string {
+    di, da := instruction_displacement_string(itrm.displacement, allocator = allocator), sized_instruction_data_string(itrm.sized_data, allocator = allocator)
+    defer { delete(di, allocator = allocator); delete(da, allocator = allocator) }
+    return fmt.aprintf("%s %s, %s", opcode, di, da, allocator = allocator)
+}
+
+@private
+imm_to_reg_mem :: proc(opcode: u8, s: io.Reader) -> (inst: Instruction, err: Decode_Instruction_Error) {
     size := Instruction_Size(opcode & 0b1)
-    displacement, _ := instruction_displacement_from_stream(size, s) or_return
+    displacement, byte := instruction_displacement_from_stream(size, s) or_return
     sized_data := sized_instruction_data_from_stream(size, s) or_return
-    return Imm_To_Reg_Mem{sized_data = sized_data, displacement = displacement}, nil
+
+    i := Imm_To_Reg_Mem{sized_data = sized_data, displacement = displacement}
+
+    switch (opcode >> 3) & 0b111 {
+    case 0b000:
+        inst = Add_Instruction(Add_Imm_To_Reg_Mem(i))
+    case 0b101:
+        inst = Sub_Instruction(Sub_Imm_To_Reg_Mem(i))
+    case 0b111:
+        inst = Cmp_Instruction(Cmp_Imm_To_Reg_Mem(i))
+    case 0o306, 0o307:
+        inst = Mov_Instruction(Mov_Imm_To_Reg_Mem(i))
+    }
+
+    return inst, nil
 }
 
 // reg to mem/reg
@@ -279,6 +312,19 @@ Reg_To_Mem :: struct {
     size:         Instruction_Size,
     reg:          Register,
     displacement: Instruction_Displacement,
+}
+
+@private
+reg_to_mem_string :: proc(opcode: string, rtm: Reg_To_Mem, allocator := context.allocator) -> string {
+    d, r := instruction_displacement_string(rtm.displacement, allocator = allocator), register_string(rtm.reg, allocator = allocator)
+    defer { delete(d, allocator = allocator); delete(r, allocator = allocator) }
+    switch rtm.direction {
+    case .Reg_Source:
+        return fmt.aprintf("%s %s, %s", opcode, d, r, allocator = allocator)
+    case .Reg_Destination:
+        return fmt.aprintf("%s %s, %s", opcode, r, d, allocator = allocator)
+    case: unreachable()
+    }
 }
 
 @private
@@ -335,15 +381,7 @@ instruction_string :: proc(i: Instruction, allocator := context.allocator) -> st
     case Mov_Instruction:
         switch mov in i {
         case Mov_Reg_To_Mem:
-            d, r := instruction_displacement_string(mov.displacement, allocator = allocator), register_string(mov.reg, allocator = allocator)
-            defer { delete(d, allocator = allocator); delete(r, allocator = allocator) }
-            switch mov.direction {
-            case .Reg_Source:
-                return fmt.aprintf("mov %s, %s", d, r, allocator = allocator)
-            case .Reg_Destination:
-                return fmt.aprintf("mov %s, %s", r, d, allocator = allocator)
-            case: unreachable()
-            }
+            return reg_to_mem_string("mov", mov, allocator)
         case Mov_Imm_To_Reg_Mem:
             di, da := instruction_displacement_string(mov.displacement, allocator = allocator), sized_instruction_data_string(mov.sized_data, allocator = allocator)
             defer { delete(di, allocator = allocator); delete(da, allocator = allocator) }
@@ -356,6 +394,33 @@ instruction_string :: proc(i: Instruction, allocator := context.allocator) -> st
             return fmt.aprintf("mov ax, [%s %d]", instruction_size_string(mov.size), mov.addr, allocator = allocator)
         case Mov_Acc_To_Mem:
             return fmt.aprintf("mov [%s %d], ax", instruction_size_string(mov.size), mov.addr, allocator = allocator)
+        }
+    case Add_Instruction:
+        switch add in i {
+        case Add_Reg_Mem_With_Register:
+            return reg_to_mem_string("add", add, allocator)
+        case Add_Imm_To_Reg_Mem:
+            return imm_to_reg_mem_string("add", add, allocator)
+        case Add_Imm_To_Acc:
+            return imm_to_acc_string("add", add, allocator)
+        }
+    case Sub_Instruction:
+        switch sub in i {
+        case Sub_Reg_Mem_With_Register:
+            return reg_to_mem_string("sub", sub, allocator)
+        case Sub_Imm_To_Reg_Mem:
+            return imm_to_reg_mem_string("sub", sub, allocator)
+        case Sub_Imm_To_Acc:
+            return imm_to_acc_string("sub", sub, allocator)
+        }
+    case Cmp_Instruction:
+        switch cmp in i {
+        case Cmp_Reg_Mem_With_Register:
+            return reg_to_mem_string("cmp", cmp, allocator)
+        case Cmp_Imm_To_Reg_Mem:
+            return imm_to_reg_mem_string("cmp", cmp, allocator)
+        case Cmp_Imm_To_Acc:
+            return imm_to_acc_string("cmp", cmp, allocator)
         }
     case:
         fmt.panicf("nil instruction not supported")
@@ -375,7 +440,7 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
     case 0o210..=0o213: // reg/men to/from reg
         return Mov_Instruction(reg_to_mem(opcode, s) or_return), nil
     case 0o306, 0o307: // imm to mem
-        return Mov_Instruction(imm_to_reg_mem(opcode, s) or_return), nil
+        return imm_to_reg_mem(opcode, s) or_return, nil
     case 0o260..=0o277: // imm to reg
         size := Instruction_Size((opcode >> 3) & 0b1)
         reg := register_from_byte_with_size(opcode & 0b111, size)
@@ -400,12 +465,27 @@ instruction_from_stream :: proc(s: io.Reader) -> (i: Instruction, err: Decode_In
         }
         return Mov_Instruction(Mov_Acc_To_Mem{size = size, addr = transmute(u16)buffer}), nil
 
+    // Add
     case 0o000..=0o003:
         return Add_Instruction(reg_to_mem(opcode, s) or_return), nil
-    case 0o200..=0o203:
-        return Add_Instruction(imm_to_reg_mem(opcode, s) or_return), nil
-    case 0o004..=0o010:
+    case 0o004..=0o007:
         return Add_Instruction(imm_to_acc(opcode, s) or_return), nil
+
+    // Sub
+    case 0o050..=0o053:
+        return Sub_Instruction(reg_to_mem(opcode, s) or_return), nil
+    case 0o054..=0o057:
+        return Sub_Instruction(imm_to_acc(opcode, s) or_return), nil
+
+    // Cmp
+    case 0o070..=0o073:
+        return Cmp_Instruction(reg_to_mem(opcode, s) or_return), nil
+    case 0o074..=0o077:
+        return Cmp_Instruction(imm_to_acc(opcode, s) or_return), nil
+
+    // Add, Sub, Cmp
+    case 0o200..=0o203:
+        return imm_to_reg_mem(opcode, s)
     }
 
     err = .Unsupported_Opcode
